@@ -1,0 +1,147 @@
+name: solar-system workflow
+
+on: 
+  workflow_dispatch:
+  push:
+     branches: 
+        - main
+        - 'feature/*'
+env:
+  MONGO_URI: mongodb+srv://supercluster.d83jj.mongodb.net/superData
+  MONGO_USERNAME: ${{ vars.MONGO_USERNAME }}
+  MONGO_PASSWORD: ${{ secrets.MONGO_PASSWORD }}
+jobs:
+    UnitTest_job: 
+      name: unit testing
+      strategy:
+        matrix:
+            nodejs_version: [18,20]
+            operating_system: [ubuntu-latest]
+            exclude:
+                - nodejs_version: 18
+                  operating_system: macos-latest 
+      runs-on: ${{ matrix.operating_system }}
+
+      steps:
+        - name: checkout repository
+          uses: actions/checkout@v4
+
+        - name: list the files
+          run: |
+            pwd 
+            ls -ltr
+        - name: setup nodejs version-${{ matrix.nodejs_version }}
+          uses: actions/setup-node@v3
+          with:
+            node-version: ${{ matrix.nodejs_version }}
+        - name: Install dependencies
+          run: npm install
+        
+        - name: Unit Testing
+          run: npm test
+
+        - name: upload artifact
+          uses: actions/upload-artifact@v3
+          with:
+            name: Mocha test-result
+            path: test-results.xml
+    
+    code_coverage:
+        name: code coverage
+        runs-on: ubuntu-latest
+
+        steps:
+            - name: checkout repository
+              uses: actions/checkout@v4
+            
+            - name: setup nodejs version-18
+              uses: actions/setup-node@v3
+              with: 
+                node-version: 18
+            
+            - name: Install dependencies
+              run: npm install
+
+            - name: check code coverage
+              continue-on-error: true
+              run: npm run coverage
+
+            - name: upload artifact
+              uses: actions/upload-artifact@v3
+              with:
+                name: code coverage-result
+                path: coverage
+                retention-days: 3
+
+    docker_job:
+        name: containerization
+        needs: [UnitTest_job, code_coverage]
+        permissions:
+            packages: write
+        runs-on: ubuntu-latest
+        steps:
+            - name: checkout repo
+              uses: actions/checkout@v4
+
+            - name: dockerhub login
+              uses: docker/login-action@v2.2.0
+              with: 
+                username: ${{ vars.DOCKERHUB_USERNAME }}
+                password: ${{ secrets.DOCKERHUB_PASSWORD }}
+
+            - name: GHCR login
+              uses: docker/login-action@v2.2.0
+              with: 
+                registry: ghcr.io
+                username: ${{ github.repository_owner }}
+                password: ${{ secrets.GITHUB_TOKEN }}
+
+            - name: docker build for testing
+              uses: docker/build-push-action@v4
+              with:
+                context: .
+                push: false
+                tags: ${{ vars.DOCKERHUB_USERNAME }}/solar-system:${{ github.sha }}
+
+            - name: docker image testing
+              run: |
+                docker images
+                docker run --name solar-system-app -d \
+                    -p 3000:3000 \
+                    -e MONGO_URI=$MONGO_URI \
+                    -e MONGO_USERNAME=$MONGO_USERNAME \
+                    -e MONGO_PASSWORD=$MONGO_PASSWORD \
+                    ${{ vars.DOCKERHUB_USERNAME }}/solar-system:${{ github.sha }}
+
+                export IP=$(docker inspect -f '{{ range.NetworkSettings.Networks}}{{.IPAddress}}{{end}}' solar-system-app)
+                echo $IP
+
+                echo testing image url using wget
+                wget -q -O - 127.0.0.1:3000/live | grep live
+            
+            - name: Container registry Push
+              uses: docker/build-push-action@v4
+              with:
+                context: .
+                push: true
+                tags: |
+                  ${{ vars.DOCKERHUB_USERNAME }}/solar-system:${{ github.sha }}
+                  ghcr.io/${{ github.repository_owner }}/solar-system:${{ github.sha }}
+    
+    dev_deploy:
+      needs: docker_job
+      runs-on: ubuntu-latest
+      steps: 
+        - name: checkout Repo
+          uses: actions/checkout@v4
+        
+        - name: install kubectl cli
+          uses: azure/setup-kubectl@v3
+          with:
+            version: 'v1.26.0'
+        
+        - name: fetch kubernetes cluster details
+          run: |
+            kubectl version --short
+            echo "------------------------------------"
+            kubectl get nodes
