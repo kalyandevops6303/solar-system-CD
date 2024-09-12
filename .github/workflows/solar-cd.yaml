@@ -150,5 +150,5 @@ jobs:
         - name: fetch kubernetes cluster details
           run: |
             kubectl version --short
-            echo "------------------------"
+            echo "--------------------------"
             kubectl get nodes
