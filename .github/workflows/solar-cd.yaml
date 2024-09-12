@@ -19,7 +19,7 @@ jobs:
             operating_system: [ubuntu-latest]
             exclude:
                 - nodejs_version: 18
-                  operating_system: windows-latest 
+                  operating_system: ubuntu-latest 
       runs-on: ${{ matrix.operating_system }}
 
       steps:
@@ -140,6 +140,12 @@ jobs:
           uses: azure/setup-kubectl@v3
           with:
             version: 'v1.26.0'
+        - name:  set kubeconfig file
+          uses: azure/k8s-set-context@v4
+          with:
+               method: kubeconfig
+               kubeconfig: ${{ secrets.KUBECONFIG }}
+               #context: <context name> # current-context from kubeconfig is used as default
         
         - name: fetch kubernetes cluster details
           run: |
